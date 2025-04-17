@@ -2,8 +2,8 @@ name: Daily Beer Price Scraper
 
 on:
   schedule:
-    - cron: "*/6 * * * *"  # Runs daily at 08:00 UTC
-  push:                  # 🚀 Triggers on push to any branch
+    - cron: "1 9 * * *"  # Runs daily at 12:01 Helsinki time
+  push:                  # Triggers on push to any branch
   workflow_dispatch:     # Allows manual runs from the GitHub UI
 
 jobs:
