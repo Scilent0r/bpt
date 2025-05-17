@@ -22,3 +22,4 @@ Known caveats;
 Todo; 
 
 - Separate current database to a 4-day one and a historical price one. Even tho database size is not huge at the moment, it'll grow in the future. 
+- Replace name with ProdUID, join name to produid.
