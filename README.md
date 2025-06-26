@@ -23,3 +23,9 @@ Todo;
 
 - Separate current database to a 4-day one and a historical price one. Even tho database size is not huge at the moment, it'll grow in the future. 
 - Add ProdUID to DB, join name with ProdUID
+
+
+Update 26/6/2025;
+
+- Replaced arr with a while loop using offsets until no valid response.
+- Updated outdated API-call which resulted in loss of 10 days data before I had time to address it. 
