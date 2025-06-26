@@ -3,6 +3,8 @@ import sqlite3
 import hashlib
 from datetime import datetime
 import time
+import json
+from urllib.parse import quote
 
 # --- Helper: generate a short hash ---
 def generate_short_hash(date, name, price, length=8):
@@ -11,7 +13,7 @@ def generate_short_hash(date, name, price, length=8):
     return full_hash[:length]
 
 # --- Connect to SQLite database ---
-conn = sqlite3.connect('beerprices.db')
+conn = sqlite3.connect('./sqlite-tools/beerprices.db')
 cursor = conn.cursor()
 
 # --- Create table with hash column ---
@@ -26,46 +28,93 @@ cursor.execute('''
 ''')
 
 # --- API call setup ---
-arr = [24, 48, 72, 96, 120, 144, 168, 192, 216, 240, 264, 288, 312, 336, 360, 384, 408, 432]
 current_date = datetime.now().strftime("%Y-%m-%d")
+offset = 0
+limit = 24  # Number of items to fetch per request
+has_more_beers = True
 
+base_url = "https://api.s-kaupat.fi/"
 
-for val in arr: 
+while has_more_beers:
+    # Construct the parameters
+    variables = {
+        "includeStoreEdgePricing": True,
+        "storeEdgeId": "726109200",
+        "facets": [
+            {"key": "brandName", "order": "asc"},
+            {"key": "labels"}
+        ],
+        "generatedSessionId": "2381cfa6-4f1e-4f16-bc98-62a0e3b7fd47",
+        "includeAgeLimitedByAlcohol": True,
+        "limit": limit,
+        "queryString": "",
+        "slug": "alkoholi-ja-virvoitusjuomat/oluet",
+        "storeId": "726109200",
+        "useRandomId": False,
+        "from": offset
+    }
     
-    #Ale
-    #u1 = "https://api.s-kaupat.fi/?operationName=RemoteFilteredProducts&variables=%7B%22facets%22%3A%5B%7B%22key%22%3A%22brandName%22%2C%22order%22%3A%22asc%22%7D%2C%7B%22key%22%3A%22labels%22%7D%5D%2C%22generatedSessionId%22%3A%222381cfa6-4f1e-4f16-bc98-62a0e3b7fd47%22%2C%22includeAgeLimitedByAlcohol%22%3Atrue%2C%22limit%22%3A"
-    #u2 = "%2C%22order%22%3A%22desc%22%2C%22orderBy%22%3A%22price%22%2C%22queryString%22%3A%22%22%2C%22slug%22%3A%22juomat-1%2Foluet%2Fale-olut%22%2C%22storeId%22%3A%22726109200%22%2C%22useRandomId%22%3Afalse%7D&extensions=%7B%22persistedQuery%22%3A%7B%22version%22%3A1%2C%22sha256Hash%22%3A%2229121c3595103a8c4ad58cc195a143f1c8c39789017a8165761d0b251d78da0e%22%7D%7D"
+    extensions = {
+        "persistedQuery": {
+            "version": 1,
+            "sha256Hash": "abbeaf3143217630082d1c0ba36033999b196679bff4b310a0418e290c141426"
+        }
+    }
     
-    #all
-    u1 = "https://api.s-kaupat.fi/?operationName=RemoteFilteredProducts&variables=%7B%22facets%22%3A%5B%7B%22key%22%3A%22brandName%22%2C%22order%22%3A%22asc%22%7D%2C%7B%22key%22%3A%22labels%22%7D%5D%2C%22generatedSessionId%22%3A%222381cfa6-4f1e-4f16-bc98-62a0e3b7fd47%22%2C%22includeAgeLimitedByAlcohol%22%3Atrue%2C%22limit%22%3A24%2C%22queryString%22%3A%22%22%2C%22slug%22%3A%22juomat-1%2Foluet%22%2C%22storeId%22%3A%22726109200%22%2C%22useRandomId%22%3Afalse%2C%22from%22%3A"
-    u2 = "%7D&extensions=%7B%22persistedQuery%22%3A%7B%22version%22%3A1%2C%22sha256Hash%22%3A%2229121c3595103a8c4ad58cc195a143f1c8c39789017a8165761d0b251d78da0e%22%7D%7D"
+    # Construct the query parameters
+    params = {
+        'operationName': 'RemoteFilteredProducts',
+        'variables': json.dumps(variables),
+        'extensions': json.dumps(extensions)
+    }
     
-    url = u1 + str(val) + u2
-    print(f"{val} - Fetching: {url}")
-    time.sleep(1)
+    # Construct the URL
+    url = f"{base_url}?operationName={params['operationName']}&variables={quote(params['variables'])}&extensions={quote(params['extensions'])}"
     
-    response = requests.get(url)
-    data = response.json()
-    products = data["data"]["store"]["products"]["items"]
+    print(f"Fetching: offset={offset}")
+    print(f"URL: {url}")  # For debugging
+    time.sleep(1)  # Be polite with the API
+    
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        products = data["data"]["store"]["products"]["items"]
+        
+        if not products:
+            has_more_beers = False
+            print("No more beers found, ending collection.")
+            break
+        
+        new_beers_count = 0
+        for product in products:
+            name = product.get("name")
+            price = product.get("pricing", {}).get("currentPrice")
+            if not name or price is None:
+                continue
 
-    for product in products:
-        name = product.get("name")
-        price = product.get("pricing", {}).get("currentPrice")
-        if not name or price is None:
-            continue
+            short_hash = generate_short_hash(current_date, name, price)
 
-        short_hash = generate_short_hash(current_date, name, price)
-
-        try:
-            cursor.execute('''
-                INSERT INTO prisma (hash, date, name, price)
-                VALUES (?, ?, ?, ?)
-            ''', (short_hash, current_date, name, price))
-            print(f"Inserted: {name} - {price} EUR")
-        except sqlite3.IntegrityError:
-            print(f"Skipped (duplicate): {name} - {price} EUR")
+            try:
+                cursor.execute('''
+                    INSERT INTO prisma (hash, date, name, price)
+                    VALUES (?, ?, ?, ?)
+                ''', (short_hash, current_date, name, price))
+                new_beers_count += 1
+                print(f"Inserted: {name} - {price} EUR")
+            except sqlite3.IntegrityError:
+                print(f"Skipped (duplicate): {name} - {price} EUR")
 
         conn.commit()
+        print(f"Added {new_beers_count} new beers from this batch")
+        
+        # Increment offset for next batch
+        offset += limit
+        
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        print(f"Response content: {response.content if 'response' in locals() else 'No response'}")
+        has_more_beers = False
 
 conn.close()
-print("Done.")
+print("Done. Total beers processed:", offset)
