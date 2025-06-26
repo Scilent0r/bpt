@@ -13,7 +13,7 @@ def generate_short_hash(date, name, price, length=8):
     return full_hash[:length]
 
 # --- Connect to SQLite database ---
-conn = sqlite3.connect('./sqlite-tools/beerprices.db')
+conn = sqlite3.connect('beerprices.db')
 cursor = conn.cursor()
 
 # --- Create table with hash column ---
