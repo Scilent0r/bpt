@@ -1,5 +1,8 @@
 name: Daily Beer Price Scraper
 
+permissions:
+  contents: write
+
 on:
   schedule:
     - cron: "1 9 * * *"           # your current schedule
