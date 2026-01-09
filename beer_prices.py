@@ -1,56 +1,22 @@
 import requests
-from bs4 import BeautifulSoup
 import sqlite3
 import hashlib
 from datetime import datetime
 import time
-from urllib.parse import urljoin
+import json
+from urllib.parse import quote
 
-# ================= CONFIG =================
-BASE_URL = "https://www.s-kaupat.fi/tuotteet/alkoholi-ja-virvoitusjuomat/oluet"
-DB_FILE = "beerprices.db"
-CHAIN = "S-kaupat"  # optional, can be used later if you want
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "fi-FI,fi;q=0.9,en;q=0.8",
-    "Referer": "https://www.s-kaupat.fi/",
-}
-
-# Possible product card selectors – most likely one will work (Jan 2026)
-CARD_SELECTORS = [
-    "div[data-testid='product-card']",
-    "article[class*='product']",
-    "div[class*='ProductCard']",
-    "div[class*='productCard']",
-    ".product-item",
-    "li[class*='product']",
-]
-
-# ================= HELPERS =================
+# --- Helper: generate a short hash ---
 def generate_short_hash(date, name, price, length=8):
     input_str = f"{date}-{name}-{price}"
     full_hash = hashlib.sha256(input_str.encode()).hexdigest()
     return full_hash[:length]
 
-
-def parse_price(price_text: str) -> float | None:
-    if not price_text:
-        return None
-    cleaned = price_text.replace("€", "").replace("EUR", "").replace(" ", "").strip()
-    cleaned = cleaned.replace(",", ".")
-    try:
-        return float(cleaned)
-    except ValueError:
-        return None
-
-
-# ================= DB =================
-conn = sqlite3.connect(DB_FILE)
+# --- Connect to SQLite database ---
+conn = sqlite3.connect('beerprices.db')
 cursor = conn.cursor()
 
+# --- Create table with hash column ---
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS prisma (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,100 +28,119 @@ cursor.execute('''
 ''')
 conn.commit()
 
-# ================= SCRAPING =================
+# --- UPDATED API call setup (January 2026) ---
 current_date = datetime.now().strftime("%Y-%m-%d")
-page = 1
-total_inserted = 0
-max_pages = 25  # safety limit
+offset = 0
+limit = 24  # Number of items per request
+has_more_beers = True
+base_url = "https://api.s-kaupat.fi/"
 
-print(f"Starting scrape - {BASE_URL}  ({current_date})\n")
+# IMPORTANT: Update these if request fails (get fresh values from browser Network tab)
+CURRENT_SHA256 = "ff102bea7318821d5d984b890d0a6322d2e3d9c01ba50e6eed6adb865c63efe1"
+STORE_ID = "513971200"  # ← Changed to match your new URL
 
-while page <= max_pages:
-    url = BASE_URL if page == 1 else f"{BASE_URL}?page={page}"
-    print(f"Page {page:2d} | {url}")
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Referer": "https://www.s-kaupat.fi/",
+    "Origin": "https://www.s-kaupat.fi",
+}
+
+while has_more_beers:
+    # Construct variables (updated with new fields)
+    variables = {
+        "facets": [
+            {"key": "brandName", "order": "asc"},
+            {"key": "labels"}
+        ],
+        "generatedSessionId": "0b5cd573-3cfe-4814-9a9f-ac33f5140c37",  # can be dummy-ish
+        "fetchSponsoredContent": True,
+        "includeAgeLimitedByAlcohol": True,
+        "limit": limit,
+        "queryString": "",
+        "slug": "alkoholi-ja-virvoitusjuomat/oluet",
+        "storeId": STORE_ID,
+        "useRandomId": False,
+        "marketingId": "e5b2ded0-b696-44f7-afdd-c5dc73ac20f4",  # added from your new URL
+        "from": offset
+    }
+
+    extensions = {
+        "persistedQuery": {
+            "version": 1,
+            "sha256Hash": CURRENT_SHA256
+        }
+    }
+
+    # Construct params
+    params = {
+        'operationName': 'RemoteFilteredProducts',
+        'variables': json.dumps(variables),
+        'extensions': json.dumps(extensions)
+    }
+
+    # Build URL (GET style - original approach)
+    url = f"{base_url}?operationName={params['operationName']}&variables={quote(params['variables'])}&extensions={quote(params['extensions'])}"
+
+    print(f"Fetching offset={offset}")
+    print(f"URL: {url[:300]}...")  # shortened for readability
+
+    time.sleep(1.5)  # Be polite
 
     try:
+        # Try GET first (like original)
         response = requests.get(url, headers=HEADERS, timeout=12)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
+        # If you get 405/400 → try POST instead (uncomment & comment GET):
+        # response = requests.post(base_url, json={"variables": variables, "extensions": extensions}, headers=HEADERS)
 
-        # Most reliable selector right now: articles with data-test-id="product-card"
-        product_cards = soup.select('article[data-test-id="product-card"]')
-        
-        if not product_cards:
-            print(" !!! No product cards found - site structure changed again !!!")
-            print("First 2000 chars of response:\n", str(soup)[:2000])
+        response.raise_for_status()
+        data = response.json()
+
+        # Debug: show if GraphQL error
+        if "errors" in data:
+            print("GraphQL ERROR:", json.dumps(data["errors"], indent=2))
+            has_more_beers = False
             break
 
-        print(f" → Found {len(product_cards)} product cards")
+        products = data.get("data", {}).get("store", {}).get("products", {}).get("items", [])
+
+        if not products:
+            print("No more beers found, ending collection.")
+            has_more_beers = False
+            break
 
         new_beers_count = 0
+        for product in products:
+            name = product.get("name")
+            # Price path may vary - check in browser response what is the real path
+            price = product.get("pricing", {}).get("currentPrice") or product.get("price", {}).get("value")
 
-        for card in product_cards:
+            if not name or price is None:
+                continue
+
+            short_hash = generate_short_hash(current_date, name, price)
+
             try:
-                # Name: very reliable - span with title attribute inside the link
-                name_span = card.select_one('span[title][class*="fdLJWj"]')  # or just 'span[title]'
-                name = name_span.get_text(strip=True) if name_span else ""
-                
-                # Fallback: if title attr is missing, take from the link text
-                if not name:
-                    name_link = card.select_one('a.product-link')
-                    name = name_link.get_text(strip=True) if name_link else ""
-                
-                if not name:
-                    continue
-
-                # Price: extremely stable attribute
-                price_span = card.select_one('span[data-test-id="display-price"]')
-                price_str = price_span.get_text(strip=True) if price_span else ""
-                price = parse_price(price_str)
-                
-                if price is None:
-                    continue
-
-                short_hash = generate_short_hash(current_date, name, price)
-
                 cursor.execute('''
                     INSERT INTO prisma (hash, date, name, price)
                     VALUES (?, ?, ?, ?)
                 ''', (short_hash, current_date, name, price))
-
                 new_beers_count += 1
-                print(f" Inserted: {name} - {price} €")
-
+                print(f"Inserted: {name} - {price} EUR")
             except sqlite3.IntegrityError:
-                print(f" Skipped (duplicate): {name} - {price} €")
-            except Exception as e:
-                print(f" Item error: {e}")
+                print(f"Skipped (duplicate): {name} - {price} EUR")
 
         conn.commit()
-        print(f" → Added {new_beers_count} new beers this page\n")
+        print(f"Added {new_beers_count} new beers from this batch\n")
 
-        if new_beers_count == 0 and page > 1:
-            print(" No new items on page >1 → probably reached the end")
-            break
-
-        # Polite delay
-        time.sleep(3.2)  # slightly randomized feel
-
-        # Better last page detection (site shows "Sivu X / Y" or total products)
-        page_info = soup.find(string=lambda t: t and ('Sivu ' in t or 'tuotetta' in t))
-        if page_info and ' / ' in page_info:
-            print(f" → Pagination info: {page_info.strip()}")
-        
-        # Optional: check for disabled next or no more links
-        next_link = soup.select_one('a[href*="page="][aria-disabled="true"], button:disabled[class*="next"]')
-        if next_link:
-            print(" → Next button disabled → last page")
-            break
-
-        page += 1
+        offset += limit
 
     except Exception as e:
-        print(f"Request/page error: {e}")
-        break
+        print(f"Error occurred: {e}")
+        print(f"Status code: {response.status_code if 'response' in locals() else 'No response'}")
+        print(f"Response content: {response.text[:500] if 'response' in locals() else 'No response'}")
+        has_more_beers = False
 
 conn.close()
-print(f"\nDone! Total new beers this run: {total_inserted}")
-print(f"Database: {DB_FILE}")
-
+print("Done. Total beers processed:", offset)
