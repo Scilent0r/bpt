@@ -79,37 +79,37 @@ while page <= max_pages:
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # Find product cards
-        products = []
-        for selector in CARD_SELECTORS:
-            found = soup.select(selector)
-            if found:
-                products = found
-                print(f"  → Using selector: {selector}  ({len(products)} items)")
-                break
-
-        if not products:
-            print("  !!! No products found - selectors probably outdated !!!")
-            print("  → Inspect page → right-click product → Copy selector")
+        # Most reliable selector right now: articles with data-test-id="product-card"
+        product_cards = soup.select('article[data-test-id="product-card"]')
+        
+        if not product_cards:
+            print(" !!! No product cards found - site structure changed again !!!")
+            print("First 2000 chars of response:\n", str(soup)[:2000])
             break
+
+        print(f" → Found {len(product_cards)} product cards")
 
         new_beers_count = 0
 
-        for card in products:
+        for card in product_cards:
             try:
-                # Name
-                name_tag = card.select_one("h3, h4, [class*='name'], [class*='title'], a[class*='name']")
-                name = name_tag.get_text(strip=True) if name_tag else ""
+                # Name: very reliable - span with title attribute inside the link
+                name_span = card.select_one('span[title][class*="fdLJWj"]')  # or just 'span[title]'
+                name = name_span.get_text(strip=True) if name_span else ""
+                
+                # Fallback: if title attr is missing, take from the link text
+                if not name:
+                    name_link = card.select_one('a.product-link')
+                    name = name_link.get_text(strip=True) if name_link else ""
+                
                 if not name:
                     continue
 
-                # Price
-                price_tag = card.select_one(
-                    "[data-testid='price'], [class*='price'], .price-amount, "
-                    "span[class*='value'], [class*='price__value'], strong, .price"
-                )
-                price_str = price_tag.get_text(strip=True) if price_tag else ""
+                # Price: extremely stable attribute
+                price_span = card.select_one('span[data-test-id="display-price"]')
+                price_str = price_span.get_text(strip=True) if price_span else ""
                 price = parse_price(price_str)
+                
                 if price is None:
                     continue
 
@@ -121,30 +121,32 @@ while page <= max_pages:
                 ''', (short_hash, current_date, name, price))
 
                 new_beers_count += 1
-                print(f"  Inserted: {name} - {price} €")
+                print(f" Inserted: {name} - {price} €")
 
             except sqlite3.IntegrityError:
-                print(f"  Skipped (duplicate): {name} - {price} €")
+                print(f" Skipped (duplicate): {name} - {price} €")
             except Exception as e:
-                print(f"  Item error: {e}")
+                print(f" Item error: {e}")
 
         conn.commit()
-        print(f"  → Added {new_beers_count} new beers this page\n")
+        print(f" → Added {new_beers_count} new beers this page\n")
 
-        if new_beers_count == 0:
-            print("  No new items → probably last page")
+        if new_beers_count == 0 and page > 1:
+            print(" No new items on page >1 → probably reached the end")
             break
 
-        # Polite delay - very important
-        time.sleep(3.1)
+        # Polite delay
+        time.sleep(3.2)  # slightly randomized feel
 
-        # Rough last page detection
-        next_link = soup.select_one(
-            "a[aria-label*='seuraava'], a[class*='next'], [rel='next'], "
-            "button[class*='next'], a[href*='page=']"
-        )
-        if not next_link:
-            print("  → No next page link found → finishing")
+        # Better last page detection (site shows "Sivu X / Y" or total products)
+        page_info = soup.find(string=lambda t: t and ('Sivu ' in t or 'tuotetta' in t))
+        if page_info and ' / ' in page_info:
+            print(f" → Pagination info: {page_info.strip()}")
+        
+        # Optional: check for disabled next or no more links
+        next_link = soup.select_one('a[href*="page="][aria-disabled="true"], button:disabled[class*="next"]')
+        if next_link:
+            print(" → Next button disabled → last page")
             break
 
         page += 1
@@ -156,3 +158,4 @@ while page <= max_pages:
 conn.close()
 print(f"\nDone! Total new beers this run: {total_inserted}")
 print(f"Database: {DB_FILE}")
+
