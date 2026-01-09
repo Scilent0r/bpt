@@ -2,8 +2,8 @@ name: Daily Beer Price Scraper
 
 on:
   schedule:
-    - cron: "1 9 * * *"           # ≈ 12:01 Helsinki time (UTC+2/+3)
-  workflow_dispatch:              # allows manual trigger from GitHub UI
+    - cron: "1 9 * * *"           # ≈ 12:01 Helsinki time
+  workflow_dispatch:
 
 jobs:
   scrape-and-commit:
@@ -13,28 +13,26 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0              # ← Critical: full history → prevents push rejection
+        fetch-depth: 0
 
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.12'      # explicit modern version (you can change to 3.11/3.13)
+        python-version: '3.12'
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install requests beautifulsoup4
 
     - name: Run beer price script
       run: python beer_prices.py
 
-    # Optional: useful for debugging
     - name: Show git status (debug)
       run: |
         git status
         git diff || true
 
-    # Commit & push only if there are actual changes
     - name: Commit and push updated database (if changed)
       run: |
         git config user.name  "github-actions[bot]"
@@ -42,13 +40,11 @@ jobs:
         
         git add -f beerprices.db
         
-        # Only commit if beerprices.db has changes
         if ! git diff --staged --quiet; then
           git commit -m "Update beerprices.db [auto] $(date +'%Y-%m-%d %H:%M')"
           git push
         else
           echo "No changes to commit"
         fi
-
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
