@@ -64,7 +64,7 @@ if filtered.empty:
 else:
     # Replace NaNs with "-"
     display_df = filtered.copy()
-    display_df = display_df.applymap(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+    display_df = display_df.map(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
     display_df.insert(0, "name", display_df.index)
 
     # Define row-level highlight logic
